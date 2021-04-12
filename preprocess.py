@@ -7,10 +7,10 @@ import music21 as m21
 import json
 import keras as K
 import numpy as np
-import collections
+
 
 # ----------------- Directories constants --------------------------------#
-DIRECTORY = "test" #slashes like '/' for subdirectories
+DIRECTORY = "beethoven" #slashes like '/' for subdirectories
 SONGS_PATH = DIRECTORY + "/songs"
 ENCODED_SONGS_FOLDER_PATH = DIRECTORY + "/encoded_songs"
 SINGLE_FILE_DATASET_PATH = DIRECTORY + "/single_file_encoded_songs"
@@ -19,28 +19,36 @@ MAPPING_INDEX_TO_SYMBOL_PATH = DIRECTORY + "/mapping_index_to_symbol.json"
 # ------------------------------------------------------------------------#
 
 # ----------------- Preprocessing constants ------------------------------#
+ALLOWED_EXTENSIONS = [".krn", ".mid"]
 SEQUENCE_LENGTH = 64 # Length of the sequence input of the LSTM model
-ACCEPTABLE_DURATIONS_MULTIPLE = 0.25 #every duration multiple of a 16th note
+ACCEPTABLE_DURATIONS_MULTIPLE = 0.25 # it is every duration multiple of a 16th note
+ALLOWED_PART_NAMES = ["piano"]
 # ------------------------------------------------------------------------#
 
 
 def load_songs(dataset_path):
     """
-    Loads all pieces in dataset using music21.
+    Loads all pieces in the specified dataset using music21.
     
-    -param dataset_path (str): Path to dataset
-    -return songs (list of m21 streams): List containing all pieces
+    Arguments:
+        dataset_path (str): Path to dataset
+    
+    Returns:
+        List of tuples (file_name, m21.Score)
     """
-    songs = []
+    filename_and_songs = []
 
     # go through all the files in dataset and load them with music21
     for path, subdirs, files in os.walk(dataset_path):
-        print(f"\tnumber of available songs: {len(files)}")
+        print(f"\tnumber of available files: {len(files)}")
         for file in files:
-            song = m21.converter.parse(os.path.join(path, file))
-            songs.append(song) #Music21 Score                
+            file_name, file_extension = os.path.splitext(file) #https://stackoverflow.com/questions/541390/extracting-extension-from-filename-in-python
+            if file_extension in ALLOWED_EXTENSIONS:
+                song = m21.converter.parse(os.path.join(path, file)) #type = Music21 Score
+                tuple_= (file_name, song)
+                filename_and_songs.append(tuple_)          
        
-    return songs
+    return filename_and_songs
 
 def has_acceptable_durations(song, minimum_duration_multiple = ACCEPTABLE_DURATIONS_MULTIPLE):
     """
@@ -55,25 +63,44 @@ def has_acceptable_durations(song, minimum_duration_multiple = ACCEPTABLE_DURATI
     - true or false
     """
     #Looks at all of the notes M21 Objects   
-    print("\tduration histogram:")
-    duration_to_frequency = {}
+    print("\n\tDuration histogram for each part:")
     
-    # Creates dictionary of durations
-    for note in song.flat.notesAndRests:
-        duration = note.duration.quarterLength      
-        if duration not in duration_to_frequency.keys():
-             duration_to_frequency[duration] = 0
-        duration_to_frequency[duration] += 1   
-    ordered_key_dict = collections.OrderedDict(sorted(duration_to_frequency.items()))
+    acceptable_by_part = {}
+    
+    # Look at each part    
+    parts_list = song.getElementsByClass(m21.stream.Part)
+    for i, p in enumerate(parts_list):
         
-    # checks if duration is ok
-    is_acceptable = True
-    for dur, freq in ordered_key_dict.items():
-        is_dur_ok = (dur % minimum_duration_multiple == 0)
-        is_acceptable = is_acceptable and is_dur_ok
-        print(f"\t\td = {dur} appears {freq} times, acceptable: {is_dur_ok}")
+        part_name = p.partName
+        acceptable_by_part[p] = True
+        print(f"\n\t\tPart #{i+1}, name = {part_name}")
+        print("\t\tduration histogram:")    
     
-    print(f"\t\tacceptable durations: {is_acceptable}")
+        # Creates dictionary of durations
+        duration_to_frequency = {} #dictionary duration -> frequency
+        notes_and_rests = p.flat.notesAndRests
+        for note in notes_and_rests:
+            duration = note.duration.quarterLength      
+            if duration not in duration_to_frequency.keys():
+                 duration_to_frequency[duration] = 0
+            duration_to_frequency[duration] += 1   
+        ordered_dict_by_val = dict(sorted(duration_to_frequency.items(), key=lambda item: item[1]))
+            
+        # checks if duration is ok        
+        for dur, freq in ordered_dict_by_val.items():
+            is_dur_ok = (dur % minimum_duration_multiple == 0)
+            acceptable_by_part[p] = acceptable_by_part[p] and is_dur_ok
+            print(f"\t\t\td = {dur} appears {freq} times, acceptable: {is_dur_ok}")
+        
+            
+    # check acceptabilty for all the parts
+    is_acceptable = True
+    print()
+    for i, p in enumerate(acceptable_by_part.keys()):
+        part_name = p.partName
+        print(f"\tPart #{i+1}, name = {part_name} is acceptable: {acceptable_by_part[p]}")
+        is_acceptable = is_acceptable and acceptable_by_part[p]
+    
     return is_acceptable
 
 def transpose(song):
@@ -85,16 +112,29 @@ def transpose(song):
     -return transposed_song (m21 stream)
     """
 
+    print("\n\tTransposing song")
+
     # get key from the song
     parts_list = song.getElementsByClass(m21.stream.Part)
-    first_part = parts_list[0].getElementsByClass(m21.stream.Measure) #getting all the measures
-    key = first_part[0][4] # the key is usually stored in the index = 4
-
+    
+    # Just look at the first part (hardcode)
+    first_part = parts_list[0].getElementsByClass(m21.stream.Measure) # getting all the measures
+    
+    # Look at the key
+    key = None
+    
+    # Try to extract it from the object
+    try:
+        key = first_part[0][4] # the key is usually stored in the index = 4
+    except:
+        print("\t\tkey could not be retrieved from the Measure object")
+    
     # If this object is not a m21.Key object, estimate it
     if not isinstance(key, m21.key.Key):
         key = song.analyze("key")
+        print("\t\tEstimating key")
     
-    print(f"\tkey: {key.name}")    
+    print(f"\t\tkey is {key.name}")    
     
     # get interval for transposition, i.e., if key = Bmaj, how much to move from Bmaj to Cmaj?
     if key.mode == "major":    #if the key is major calculate how to move to Cmaj
@@ -106,7 +146,7 @@ def transpose(song):
     tranposed_song = song.transpose(interval)
     return tranposed_song
 
-def encode_song(song, time_step = 0.25):
+def encode_song(song, time_step = ACCEPTABLE_DURATIONS_MULTIPLE):
     """
     Converts a score into a time-series-like music representation. Each item in the encoded list represents 'min_duration'
     quarter lengths. The symbols used at each step are: integers for MIDI notes, 'r' for representing a rest, and '_'
@@ -124,12 +164,17 @@ def encode_song(song, time_step = 0.25):
     Returns:
     None
     """
-        
+    
+    print("\tEncoding song...")
+    
     encoded_song = []
 
     # Flattening all the elements of the song and consider just (A) notes and (B) rests
-    for event in song.flat.notesAndRests:
-
+    notes_and_rests_list = song.flat.notesAndRests
+    for event in notes_and_rests_list:
+        
+        symbol = None
+        
         # (A) handle notes
         if isinstance(event, m21.note.Note):
             symbol = event.pitch.midi # 
@@ -171,18 +216,26 @@ def preprocess(songs_path = SONGS_PATH):
         
     # 1. Loads the songs
     print("Loading songs...")
-    songs = load_songs(songs_path)
+    filename_and_songs = load_songs(songs_path) #list of tuples
           
     # Enumerate song one by one, indexing by i
     saved_songs = 0
-    for i, song in enumerate(songs):
+    for i, filename_song in enumerate(filename_and_songs):
 
-        print(f"\nanalyzing song #{i+1}")        
+        file_name, song = filename_song # retrieve the info from the tuple     
+        print(f"\nanalyzing song #{i+1} named {file_name}")        
+
+        # Song characteristics
+        song_parts = song.getElementsByClass(m21.stream.Part)
+        print(f"\tThe song has {len(song_parts)} parts:")
+        for i, p in enumerate(song_parts):
+            part_name2 = p.partName
+            print(f"\t\tPart #{i} name is {part_name2}")
 
         # 2. Eliminate songs with non acceptable durations
         if not has_acceptable_durations(song):
-            print("\tsong not encoded...")
-            continue #skip the song
+            print("\tdurations are non acceptable, song not encoded...")
+            continue # skip the song
 
         # 3. Transpose the song to Cmaj or Amin key
         song = transpose(song)
