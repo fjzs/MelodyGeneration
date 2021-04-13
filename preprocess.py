@@ -9,10 +9,11 @@ import keras as K
 import numpy as np
 
 
+
 # ----------------- Directories constants --------------------------------#
 DIRECTORY = "beethoven" #slashes like '/' for subdirectories
 SONGS_PATH = DIRECTORY + "/songs"
-ENCODED_SONGS_FOLDER_PATH = DIRECTORY + "/encoded_songs"
+ENCODED_SONGS_FOLDER_PATH = DIRECTORY + "/encoded songs"
 SINGLE_FILE_DATASET_PATH = DIRECTORY + "/single_file_encoded_songs"
 MAPPING_SYMBOL_TO_INDEX_PATH = DIRECTORY + "/mapping_symbol_to_index.json"
 MAPPING_INDEX_TO_SYMBOL_PATH = DIRECTORY + "/mapping_index_to_symbol.json"
@@ -127,14 +128,13 @@ def transpose(song):
     try:
         key = first_part[0][4] # the key is usually stored in the index = 4
     except:
-        print("\t\tkey could not be retrieved from the Measure object")
+        pass
     
     # If this object is not a m21.Key object, estimate it
     if not isinstance(key, m21.key.Key):
         key = song.analyze("key")
-        print("\t\tEstimating key")
-    
-    print(f"\t\tkey is {key.name}")    
+            
+    print(f"\t\tKey is {key.name}")    
     
     # get interval for transposition, i.e., if key = Bmaj, how much to move from Bmaj to Cmaj?
     if key.mode == "major":    #if the key is major calculate how to move to Cmaj
@@ -148,37 +148,75 @@ def transpose(song):
 
 def encode_song(song, time_step = ACCEPTABLE_DURATIONS_MULTIPLE):
     """
-    Converts a score into a time-series-like music representation. Each item in the encoded list represents 'min_duration'
-    quarter lengths. The symbols used at each step are: integers for MIDI notes, 'r' for representing a rest, and '_'
-    for representing notes/rests that are carried over into a new time step. Here's a sample encoding:
+    Converts a score into a time-series-like music representation. Each item in the encoded list represents
+    quarter lengths and is appended by a space character. The symbols used at each step are: 
+        - integers for MIDI number notes
+        * 60 = C4
+        * 61 = C4#
+        * 62 = D4
+        * 63 = D4#
+        * 64 = E4
+        * 65 = F4
+        * 66 = F4#
+        * 67 = G4
+        * 68 = G4#
+        * 69 = A4
+        * 70 = A4#
+        * 71 = B4
+        * 72 = C5
+        - 'r' for representing a rest
+        - '_' for representing notes/rests
+        - X,Y,Z,W for chords (list of integers connected by commas)
+    
+    Here's a sample encoding:
     
     C4 note for 1 duration would be:
-    [60, "_", "_", "_"]
-    Pitch Symbol = 60
-    The note lasts 4 quarter lengths
-        
+        [60 _ _ _]
+        Pitch Symbol = 60
+        The note lasts 4 quarter lengths
+    
+    Dmaj (D + F# + A) chord for 1/2 duration would be:
+        [62,66,69 _]
+    
     Arguments:
     -song (m21 stream): Piece to encode
     -time_step (float): Duration of each time step in quarter length
 
     Returns:
-    None
+        encoded song
     """
     
-    print("\tEncoding song...")
+    # Documentation about General Note -> base class for {Note, Rest, Chord}
+    # https://web.mit.edu/music21/doc/moduleReference/moduleNote.html#music21.note.GeneralNote
+    
+    # About Chords
+    # https://web.mit.edu/music21/doc/moduleReference/moduleChord.html#music21.chord.Chord
+    
+    print("\n\tEncoding song...")
     
     encoded_song = []
 
     # Flattening all the elements of the song and consider just (A) notes and (B) rests
-    notes_and_rests_list = song.flat.notesAndRests
-    for event in notes_and_rests_list:
+    flat_representation = song.flat
+    note_chords_rests_list = flat_representation.notesAndRests
+    for event in note_chords_rests_list:
         
         symbol = None
         
         # (A) handle notes
         if isinstance(event, m21.note.Note):
-            symbol = event.pitch.midi # 
-        # (B) handle rests
+            symbol = event.pitch.midi
+        
+        # (B) handle chords
+        elif isinstance(event, m21.chord.Chord):
+            # List of pitches in the chord, for Dmaj would be [62,66,69]
+            # Need to get them sorted to avoid duplicates, such as [62,66,69] and [66,62,69]
+            sorted_pitches_by_midi = sorted([p.midi for p in event.pitches])
+            midi_pitches = [str(i) for i in sorted_pitches_by_midi]
+            # Append them in a string object sepparated by comma
+            symbol = ",".join(midi_pitches)
+        
+        # (C) handle rests
         elif isinstance(event, m21.note.Rest):
             symbol = "r"
 
@@ -186,7 +224,7 @@ def encode_song(song, time_step = ACCEPTABLE_DURATIONS_MULTIPLE):
         steps = int(event.duration.quarterLength / time_step)
         for step in range(steps):
 
-            # If it's the first time we see a note/rest, let's encode it. "60" of [60, "_", "_", "_"]
+            # If it's the first time we see a event, let's encode it. "60" of [60, "_", "_", "_"]
             # Otherwise, it means we're carrying the same symbol in a new time step "_" of [60, "_", "_", "_"]
             if step == 0:
                 encoded_song.append(symbol)
@@ -217,17 +255,19 @@ def preprocess(songs_path = SONGS_PATH):
     # 1. Loads the songs
     print("Loading songs...")
     filename_and_songs = load_songs(songs_path) #list of tuples
+    quantity_songs = len(filename_and_songs)
+    max_digits = len(str(quantity_songs))
           
     # Enumerate song one by one, indexing by i
     saved_songs = 0
     for i, filename_song in enumerate(filename_and_songs):
 
         file_name, song = filename_song # retrieve the info from the tuple     
-        print(f"\nanalyzing song #{i+1} named {file_name}")        
+        print(f"\nAnalyzing song #{i+1} named {file_name}")        
 
         # Song characteristics
         song_parts = song.getElementsByClass(m21.stream.Part)
-        print(f"\tThe song has {len(song_parts)} parts:")
+        print(f"\n\tThe song has {len(song_parts)} parts:")
         for i, p in enumerate(song_parts):
             part_name2 = p.partName
             print(f"\t\tPart #{i} name is {part_name2}")
@@ -248,12 +288,12 @@ def preprocess(songs_path = SONGS_PATH):
             os.makedirs(ENCODED_SONGS_FOLDER_PATH)
 
         # Save songs to text file
-        file_name = "encoded_song_"+ str(i+1)
-        file_path = ENCODED_SONGS_FOLDER_PATH +"/"+file_name
+        encoded_file_name = "encoded song " + str(i).zfill(max_digits) + " " + file_name
+        file_path = ENCODED_SONGS_FOLDER_PATH + "/" + encoded_file_name
         with open(file_path, "w") as fp:
             fp.write(encoded_song)
             saved_songs += 1
-            print(f"\tsaved as {file_name}")
+            print(f"\t\tSaved as '{encoded_file_name}'")
         
     print(f"\nnumber of encoded songs: {saved_songs}")
 
@@ -326,8 +366,7 @@ def create_mapping(songs):
     mappings_index_to_symbol = {}
 
     # identify the vocabulary
-    songs = songs.split()
-    vocabulary = list(set(songs)) #the set eliminate duplicates symbols
+    vocabulary = list(set(songs.split())) #the set eliminate duplicates symbols
     
     # create mappings
     print(f"\tthere are {len(vocabulary)} unique symbols. The elements are:")
@@ -345,27 +384,30 @@ def create_mapping(songs):
 
     print("\tdictionaries created")
 
-def convert_songs_to_int_list(songs):
+def map_from_symbol_to_indexes(mapped_songs_file):
     """
-    Takes a symbols string separated by " " and returns it as a list of integers
+    Takes a list of symbols as string separated by " " and returns it as a list of integers (keys)
     
-    -param songs (str): lots og songs appended together as string symbols
-    -return a list of integers
+    Arguments:
+        mapped_songs_file (str): lots of songs appended together as string symbols
+    
+    Returns:
+        song_encoded_as_indexes -> a list of integers with their symbols encoded as integers
     """
-    int_songs = []
+    song_encoded_as_indexes = []
 
     # load mappings
     with open(MAPPING_SYMBOL_TO_INDEX_PATH, "r") as fp: #read mode
         mappings_symbol_to_index = json.load(fp)
 
     # transform songs string to list of symbols
-    songs = songs.split()
+    list_of_symbols = mapped_songs_file.split()
 
-    # map songs to int
-    for symbol in songs:
-        int_songs.append(mappings_symbol_to_index[symbol])
+    # map each element to its index
+    for symbol in list_of_symbols:
+        song_encoded_as_indexes.append(mappings_symbol_to_index[symbol])
 
-    return int_songs
+    return song_encoded_as_indexes
 
 
 def generate_training_sequences(sequence_length_Tx):
@@ -388,24 +430,25 @@ def generate_training_sequences(sequence_length_Tx):
     """
 
     # load songs from encoded single file and map them to int
-    songs = load(SINGLE_FILE_DATASET_PATH)
-    int_songs = convert_songs_to_int_list(songs)
+    encoded_single_file = load(SINGLE_FILE_DATASET_PATH)
+    song_encoded_as_indexes = map_from_symbol_to_indexes(encoded_single_file)
 
+    # Initialize outputs
     X = []
     Y = []
 
     # generate the training sequences
     # if we have 5 symbols: [1,2,3,4,5] and sequence length is 3, then we have:
     # [1,2,3] -> 4, [2,3,4] -> 5   => 2 sequences
-    num_examples = len(int_songs) - sequence_length_Tx
+    num_examples = len(song_encoded_as_indexes) - sequence_length_Tx
     for i in range(num_examples):
-        training_example_x = int_songs[i : i + sequence_length_Tx] # List of values from i ... i + Tx - 1
-        training_example_y = int_songs[i + sequence_length_Tx]     # Value with index = i + Tx
+        training_example_x = song_encoded_as_indexes[i : i + sequence_length_Tx] # List of values from i ... i + Tx - 1
+        training_example_y = song_encoded_as_indexes[i + sequence_length_Tx]     # Value with index = i + Tx
         X.append(training_example_x) 
         Y.append(training_example_y)
 
     # one-hot encode the sequences
-    vocabulary_size = len(set(int_songs)) #number of different values        
+    vocabulary_size = len(set(song_encoded_as_indexes)) #number of different values        
     X = K.utils.to_categorical(X, num_classes = vocabulary_size)
     Y = np.array(Y)
 

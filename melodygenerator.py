@@ -5,13 +5,23 @@
 import json
 import numpy as np
 import keras as K
-from preprocess import SEQUENCE_LENGTH, MAPPING_SYMBOL_TO_INDEX_PATH, MAPPING_INDEX_TO_SYMBOL_PATH
 import music21 as m21
+from preprocess import SEQUENCE_LENGTH, MAPPING_SYMBOL_TO_INDEX_PATH, MAPPING_INDEX_TO_SYMBOL_PATH, DIRECTORY
+from train import SAVE_MODEL_PATH
+
+# ------------------------- Music creation parameters -----------------------------#
+TEMPERATURE = 1 # the higher the temperature, more randomness in the creation
+MIN_STEPS = 50 # minimum number of steps to be synthetized
+MAX_STEPS = 100 # maximum number of steps to be synthetized
+SEED = "67 _ _ _ _ _ 65 _ 64 _ 62 _ 60 _ _ _"    
+# ---------------------------------------------------------------------------------#
+
+
 
 class MelodyGenerator:
     """A class that wraps the LSTM model and offers utilities to generate melodies."""
 
-    def __init__(self, model_path="model.h5"):
+    def __init__(self, model_path = SAVE_MODEL_PATH):
         """
         Constructor that initialises TensorFlow model
         
@@ -23,12 +33,11 @@ class MelodyGenerator:
         """
 
         # Instance attributes
-        self.model_path = model_path
         self.model = K.models.load_model(model_path)
         self.mappings_symbol_to_index = {}
         self.mappings_index_to_symbol = {}
         self.vocabulary_length = 0
-        self.start_symbols = ["/"] * SEQUENCE_LENGTH
+        self.start_symbols = ["/"] * 1 # SEQUENCE_LENGTH #TODO FIX THIS
         
         # Read the vocabulary symbol -> index
         with open(MAPPING_SYMBOL_TO_INDEX_PATH, "r") as fp: 
@@ -43,39 +52,47 @@ class MelodyGenerator:
                 self.mappings_index_to_symbol[int(key)] = value
 
 
-    def generate_melody(self, seed, min_steps, max_steps, max_sequence_length, temperature):
+    def generate_melody(self, 
+                        seed_str = SEED, 
+                        min_steps = MIN_STEPS, 
+                        max_steps = MAX_STEPS,
+                        max_sequence_length = SEQUENCE_LENGTH, 
+                        temperature = TEMPERATURE):
         """
         Generates a melody using the DL model and returns a midi file.
         
-        Arguments
-        - seed (str): Melody seed with the notation used to encode the dataset
+        Arguments:
+        - seed_str (str): Melody seed with the notation used to encode the dataset, such as 
+        "67 _ _ _ _ _ 65 _ 64,66 _ 62 _ 60 _ _ r"
         - min_steps (int): Minimum number of steps to be generated
         - max_steps (int): Maximum number of steps to be generated
         - max_sequence_len (int): Max number of steps in seed to be considered for generation
-        - temperature (float): Float in interval [0, 1]. Numbers closer to 0 make the model more deterministic.
-            A number closer to 1 makes the generation more unpredictable.
+        - temperature (float): Numbers closer to 0 make the model more deterministic.
+            A higher number makes the generation more unpredictable.
         
         Returns:
-        - melody (list of str): List with symbols representing a melody
+        - melody_list_symbols (list of str): List with symbols representing a melody
         """
-
-        # create seed with start symbols
-        seed = seed.split() # transform the seed as a list of symbols 
-        melody = seed
-        seed = self.start_symbols + seed
-
-        # map each seed symbol to the index
-        seed = [self.mappings_symbol_to_index[symbol] for symbol in seed]
+        
+        # Create seed with start symbols
+        mapped_start_symbols_to_indexes = [self.mappings_symbol_to_index[s] for s in self.start_symbols]
+        mapped_seed_to_indexes = [self.mappings_symbol_to_index[s] for s in seed_str.split()]
+                
+        # Initialize the seed
+        seed_as_list_indexes = mapped_start_symbols_to_indexes.copy() + mapped_seed_to_indexes.copy()
+        
+        # Initialize the melody
+        melody_list_symbols = [] + seed_str.split().copy()
 
         # Synthetize each step t of all the num_steps to be generated
         print("Starting synthetizing song...")
         for t in range(max_steps):
 
             # limit the seed to the last max_sequence_length time steps
-            seed = seed[-max_sequence_length:]
+            seed_as_list_indexes = seed_as_list_indexes[-max_sequence_length:]
 
             # one-hot encode the seed with shape (m, max_sequence_length, num of symbols)
-            onehot_seed = K.utils.to_categorical(seed, num_classes = self.vocabulary_length )            
+            onehot_seed = K.utils.to_categorical(seed_as_list_indexes, num_classes = self.vocabulary_length )            
             onehot_seed = onehot_seed[np.newaxis, ...] # add the first dimension as requested by Keras
 
             # make a prediction
@@ -84,7 +101,7 @@ class MelodyGenerator:
             sampled_index = self.sample_with_temperature(probabilities, temperature)
 
             # update seed
-            seed.append(str(sampled_index))
+            seed_as_list_indexes.append(str(sampled_index))
 
             # map index to symbol
             sampled_symbol = self.mappings_index_to_symbol[sampled_index]
@@ -95,9 +112,9 @@ class MelodyGenerator:
                 break
             
             # update melody
-            melody.append(sampled_symbol)            
+            melody_list_symbols.append(sampled_symbol)            
 
-        return melody
+        return melody_list_symbols
 
 
     def sample_with_temperature(self, probabilites, temperature):
@@ -123,21 +140,61 @@ class MelodyGenerator:
 
         return index
 
-
-    def save_melody(self, melody, temperature, step_duration=0.25, file_extension = "mid"):
+    
+    def create_general_note(self, quarter_length_duration, symbol):
         """
-        "Converts a melody into a MIDI file
+        Creates a GeneralNote instance for a given symbol and duration. GeneralNote is a 
+        base class for a Chord, Note or Rest
 
         Args:
-            - melody (list of str): DESCRIPTION.
-            - step_duration (float, optional): Duration of each step in quarter note lengths. Defaults to 0.25.
-            - format_ (str, optional): Defaults to "midi".
-            - file_name (str, optional): Defaults to "mel.mid".
+            quarter_length_duration (float): duration in quarter lengths.
+            symbol (str): string symbol of the notes, can be {X, "r", [X,Y,Z,...]}, where X, Y, Z are integer numbers
+
+        Returns:
+            general_note (TYPE): DESCRIPTION.
+
+        """
+        
+        #https://web.mit.edu/music21/doc/moduleReference/moduleNote.html#music21.note.GeneralNote
+        general_note = None
+        
+        # separate the symbols in case a chord is being sent
+        symbol_list = symbol.split(',')
+        
+        # handle a rest
+        if symbol_list[0] == "r": 
+            general_note = m21.note.Rest(quarterLength = quarter_length_duration)
+        
+        # handle notes and chords
+        else:
+            midi_pitches = [int(s) for s in symbol_list]
+            
+            # handle a single note
+            if len(midi_pitches) == 1:
+                general_note = m21.note.Note(midi_pitches[0], quarterLength = quarter_length_duration)
+            
+            # handle chords
+            else:
+                general_note = m21.chord.Chord(midi_pitches, quarterLength = quarter_length_duration)
+        
+        return general_note
+        
+
+    def save_melody(self, melody, temperature = TEMPERATURE, step_duration=0.25, file_extension = "mid"):
+        """
+        Converts a melody into a MIDI file
+
+        Args:
+            - melody (list of str): List of symbols according to the vocabulary
+            - temperature (float, optional): Variable for controlling the randomness of the creation. Defaults to TEMPERATURE.
+            - step_duration (float, optional): quarter length duration of each step. Defaults to 0.25.
+            - file_extension (str, optional): Defaults to "mid".
 
         Returns:
             None.
-        """        
 
+        """
+        
         # create a music21 stream to append the events (note and rests)
         stream = m21.stream.Stream()
 
@@ -178,26 +235,26 @@ class MelodyGenerator:
                 # Calculate the duration of the event
                 quarter_length_duration = step_duration * step_counter # 0.25 * 4 = 1
                 
-                m21_event = None
-                # handle a rest
-                if current_event == "r":
-                    m21_event = m21.note.Rest(quarterLength = quarter_length_duration)
-                # handle a note
-                else:
-                    m21_event = m21.note.Note(int(current_event), quarterLength = quarter_length_duration)
+                # m21_event = None
+                # # handle a rest
+                # if current_event == "r":
+                #     m21_event = m21.note.Rest(quarterLength = quarter_length_duration)
+                # # handle a note
+                # else:
+                #     m21_event = m21.note.Note(int(current_event), quarterLength = quarter_length_duration)
+                
+                m21_event = self.create_general_note(quarter_length_duration, current_event)                
                 
                 # write the event to the stream
                 stream.append(m21_event)           
 
         # write the m21 stream to a midi file
-        file_name = "len_" + str(len(melody)) + "_temp_"+str(temperature)+"."+file_extension
+        file_name = DIRECTORY + "/len_" + str(len(melody)) + "_temp_"+str(temperature)+"."+file_extension
         stream.write(fmt = "midi", fp = file_name)
 
 
 if __name__ == "__main__":
     mg = MelodyGenerator()
-    seed = "67 _ _ _ _ _ 65 _ 64 _ 62 _ 60 _ _ _"
-    temperature = 0.3
-    melody = mg.generate_melody(seed, 100, 200, SEQUENCE_LENGTH, temperature)
+    melody = mg.generate_melody()
     print(melody)
-    mg.save_melody(melody, temperature)
+    mg.save_melody(melody)
