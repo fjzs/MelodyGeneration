@@ -10,10 +10,12 @@ from preprocess import SEQUENCE_LENGTH, MAPPING_SYMBOL_TO_INDEX_PATH, MAPPING_IN
 from train import SAVE_MODEL_PATH
 
 # ------------------------- Music creation parameters -----------------------------#
-TEMPERATURE = 1 # the higher the temperature, more randomness in the creation
-MIN_STEPS = 50 # minimum number of steps to be synthetized
-MAX_STEPS = 100 # maximum number of steps to be synthetized
-SEED = "67 _ _ _ _ _ 65 _ 64 _ 62 _ 60 _ _ _"    
+TEMPERATURE = 0.5 # the higher the temperature, more randomness in the creation
+MIN_STEPS = 100 # minimum number of steps to be synthetized
+MAX_STEPS = 300 # maximum number of steps to be synthetized
+
+# Coldplay Viva la Viva Intro: C C C C D D D D G G G G Em Em Em Em
+SEED = "60 _ _ _ 60 _ _ _ 60 _ _ _ 60 _ 62 _ _ _ 62 _ _ _ 62 _ 62 _ _ _ 62 _ _ _"    
 # ---------------------------------------------------------------------------------#
 
 
