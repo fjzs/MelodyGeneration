@@ -10,8 +10,7 @@ import json
 NUM_HIDDEN_UNITS_PER_LAYER = [64] #256
 LOSS = "sparse_categorical_crossentropy"
 LEARNING_RATE = 0.01
-EPOCHS = 36 #50
-BATCH_SIZE = 128 #64
+BATCH_SIZE = 128
 SAVE_MODEL_PATH = DIRECTORY + "/model.h5"
 DROPOUT_RATE_PER_LAYER = [0.2] #list containing the drop-out rate per layer
 # ------------------------------------------------------------------------------#
@@ -92,13 +91,15 @@ def train():
     
     # generate the training sequences
     X, Y = generate_training_sequences(SEQUENCE_LENGTH)
-    print(f"\ttraining examples = {X.shape[0]}")
+    m = X.shape[0]
+    print(f"\ttraining examples = {m}")
 
     # build the network
     model = build_model()
 
     # train the model
-    history = model.fit(X, Y, epochs = EPOCHS, batch_size = BATCH_SIZE, verbose = 1)
+    total_epochs = int(m/BATCH_SIZE) 
+    history = model.fit(X, Y, epochs = total_epochs, batch_size = BATCH_SIZE, verbose = 1)
 
     # save the model to not start everytime from scratch
     model.save(SAVE_MODEL_PATH)

@@ -6,16 +6,20 @@ import json
 import numpy as np
 import keras as K
 import music21 as m21
-from preprocess import SEQUENCE_LENGTH, MAPPING_SYMBOL_TO_INDEX_PATH, MAPPING_INDEX_TO_SYMBOL_PATH, DIRECTORY
+from preprocess import SEQUENCE_LENGTH, MAPPING_SYMBOL_TO_INDEX_PATH, MAPPING_INDEX_TO_SYMBOL_PATH, DIRECTORY, STEP_DURATION
 from train import SAVE_MODEL_PATH
+import os
+
 
 # ------------------------- Music creation parameters -----------------------------#
-TEMPERATURE = 0.5 # the higher the temperature, more randomness in the creation
-MIN_STEPS = 100 # minimum number of steps to be synthetized
-MAX_STEPS = 300 # maximum number of steps to be synthetized
+CREATIONS_DIRECTORY = DIRECTORY + "/4. creations"
 
-# Coldplay Viva la Viva Intro: C C C C D D D D G G G G Em Em Em Em
-SEED = "60 _ _ _ 60 _ _ _ 60 _ _ _ 60 _ 62 _ _ _ 62 _ _ _ 62 _ 62 _ _ _ 62 _ _ _"    
+# the higher the temperature, more randomness in the creation
+# t° = 0 will be defined as a deterministic sampling of the highest probability
+TEMPERATURE = 0 
+MIN_STEPS = 600 # minimum number of steps to be synthetized
+MAX_STEPS = 1000 # maximum number of steps to be synthetized
+SEED = "69 _ _ _ _ _ 72 _ _ _ _ _ _ _ r _ _ _ 72 _ _ _ _ _ _ _ _ _ _ _ 69 _ _ _ r _ _ _ _ _ _ _ 69"    
 # ---------------------------------------------------------------------------------#
 
 
@@ -124,7 +128,7 @@ class MelodyGenerator:
         Samples an index from a probability array reapplying softmax using temperature.
         It is somewhat similiar to the simmulated annealing metaheuristic method
         - If t° -> infinity => we are in a hot room, stochastic environment, probability distribution flattens
-        - If t° -> 0 => we are in a cold room, deterministic environment, single pick the highest probability
+        - If t° = 0         => we are in a cold room, deterministic environment, single pick the highest probability
         
         Arguments:
         - predictions (nd.array): Array containing probabilities for each of the possible outputs.
@@ -135,13 +139,20 @@ class MelodyGenerator:
         - index (int): Selected output symbol
         """
         
-        predictions = np.log(probabilites) / temperature
-        probabilites = np.exp(predictions) / np.sum(np.exp(predictions)) #softmax function applied
-        choices = range(len(probabilites))
-        index = np.random.choice(choices, p = probabilites)
+        index = None
+        
+        # deterministic enviroment
+        if temperature == 0:
+            index = np.armgmax(probabilites)
+        
+        # stochastic environment
+        else:
+            predictions = np.log(probabilites) / temperature
+            probabilites = np.exp(predictions) / np.sum(np.exp(predictions)) #softmax function applied
+            choices = range(len(probabilites))
+            index = np.random.choice(choices, p = probabilites)        
 
         return index
-
     
     def create_general_note(self, quarter_length_duration, symbol):
         """
@@ -182,7 +193,7 @@ class MelodyGenerator:
         return general_note
         
 
-    def save_melody(self, melody, temperature = TEMPERATURE, step_duration=0.25, file_extension = "mid"):
+    def save_melody(self, melody, temperature = TEMPERATURE, step_duration = STEP_DURATION, file_extension = "mid"):
         """
         Converts a melody into a MIDI file
 
@@ -196,6 +207,9 @@ class MelodyGenerator:
             None.
 
         """
+        
+        # Sanity check on inputs
+        assert type(melody) == list, "melody is not type list"
         
         # create a music21 stream to append the events (note and rests)
         stream = m21.stream.Stream()
@@ -218,45 +232,46 @@ class MelodyGenerator:
         step_counter = 0
         non_event_symbols = ["_", "/"]
         for t in range(len(melody)):
+            
+            try:
+                
+                # Look at the symbol at time = t
+                symbol_t = melody[t]
+                
+                # If symbol_t is an event, replace the existing current_event for this one and start the counter
+                if symbol_t not in non_event_symbols:
+                    current_event = melody[t]
+                    step_counter = 1
+                    
+                # If we are in a prolonged event "_", increase the step_counter by 1
+                elif symbol_t == "_":
+                    step_counter +=1
+                
+                # Event is finishing? 
+                # i.e., the next event starts or the melody ends --> write it to the stream
+                if ((t+1 == len(melody)) or (melody[t+1] not in non_event_symbols)):
+                    
+                    # Calculate the duration of the event
+                    quarter_length_duration = step_duration * step_counter
+                    
+                    # Create the event
+                    m21_event = self.create_general_note(quarter_length_duration, current_event)                
+                    
+                    # write the event to the stream
+                    stream.append(m21_event) 
+            except:
+                raise Exception(f"Error when generating note @ t = {t}")
 
-            # Look at the symbol at time = t
-            symbol_t = melody[t]
-            
-            # If symbol_t is an event, replace the existing current_event for this one and start the counter
-            if symbol_t not in non_event_symbols:
-                current_event = melody[t]
-                step_counter =1
-                
-            # If we are in a prolonged event "_", increase the step_counter by 1
-            if symbol_t == "_":
-                step_counter +=1
-            
-            # Event is finishing? (the next event starts or the melody ends) then write it to the stream
-            if ((t+1 == len(melody)) or (melody[t+1] not in non_event_symbols)):
-                
-                # Calculate the duration of the event
-                quarter_length_duration = step_duration * step_counter # 0.25 * 4 = 1
-                
-                # m21_event = None
-                # # handle a rest
-                # if current_event == "r":
-                #     m21_event = m21.note.Rest(quarterLength = quarter_length_duration)
-                # # handle a note
-                # else:
-                #     m21_event = m21.note.Note(int(current_event), quarterLength = quarter_length_duration)
-                
-                m21_event = self.create_general_note(quarter_length_duration, current_event)                
-                
-                # write the event to the stream
-                stream.append(m21_event)           
+        # Create folder if not existant
+        if not os.path.exists(CREATIONS_DIRECTORY):
+            os.makedirs(CREATIONS_DIRECTORY)        
 
         # write the m21 stream to a midi file
-        file_name = DIRECTORY + "/len_" + str(len(melody)) + "_temp_"+str(temperature)+"."+file_extension
+        file_name = CREATIONS_DIRECTORY + "/len_" + str(len(melody)) + "_temp_"+str(temperature)+"."+file_extension
         stream.write(fmt = "midi", fp = file_name)
 
 
 if __name__ == "__main__":
     mg = MelodyGenerator()
     melody = mg.generate_melody()
-    print(melody)
     mg.save_melody(melody)

@@ -7,25 +7,29 @@ import music21 as m21
 import json
 import keras as K
 import numpy as np
-
+import collections
+from file_utils import create_plain_file, load_plain_file, create_midi_file_from_encoded_text_file
+from fractions import Fraction
 
 
 # ----------------- Directories constants --------------------------------#
-DIRECTORY = "beethoven" #slashes like '/' for subdirectories
-SONGS_PATH = DIRECTORY + "/songs"
-ENCODED_SONGS_FOLDER_PATH = DIRECTORY + "/encoded songs"
-SINGLE_FILE_DATASET_PATH = DIRECTORY + "/single_file_encoded_songs"
+DIRECTORY = "mozart" #slashes like '/' for subdirectories
+SONGS_PATH = DIRECTORY + "/1. initial songs"
+MODIFIED_SONGS_PATH = DIRECTORY + "/2. pre-encoded songs"
+ENCODED_SONGS_FOLDER_PATH = DIRECTORY + "/3. encoded songs"
+SINGLE_FILE_DATASET_PATH = DIRECTORY + "/single_file_encoded_songs.txt"
 MAPPING_SYMBOL_TO_INDEX_PATH = DIRECTORY + "/mapping_symbol_to_index.json"
 MAPPING_INDEX_TO_SYMBOL_PATH = DIRECTORY + "/mapping_index_to_symbol.json"
 # ------------------------------------------------------------------------#
 
 # ----------------- Preprocessing constants ------------------------------#
 ALLOWED_EXTENSIONS = [".krn", ".mid"]
-SEQUENCE_LENGTH = 64 # Length of the sequence input of the LSTM model
-ACCEPTABLE_DURATIONS_MULTIPLE = 0.25 # it is every duration multiple of a 16th note
-ALLOWED_PART_NAMES = ["piano"]
-# ------------------------------------------------------------------------#
+SEQUENCE_LENGTH = 128 # Length of the sequence input of the LSTM model
 
+# https://web.mit.edu/music21/doc/moduleReference/moduleDuration.html
+# In terms of a quarter length, thus, duration of 1 time step = duration of 1/TIME_STEP_DURATION quarter note
+TIME_STEP_DURATION = Fraction(1,12) # measure unit = [quarter_length_duration / time_step]
+# ------------------------------------------------------------------------#
 
 def load_songs(dataset_path):
     """
@@ -41,35 +45,73 @@ def load_songs(dataset_path):
 
     # go through all the files in dataset and load them with music21
     for path, subdirs, files in os.walk(dataset_path):
-        print(f"\tnumber of available files: {len(files)}")
+        print(f"Number of available files: {len(files)}")
         for file in files:
             file_name, file_extension = os.path.splitext(file) #https://stackoverflow.com/questions/541390/extracting-extension-from-filename-in-python
             if file_extension in ALLOWED_EXTENSIONS:
+                print(f"\nLoading {file_name}...")
                 song = m21.converter.parse(os.path.join(path, file)) #type = Music21 Score
                 tuple_= (file_name, song)
                 filename_and_songs.append(tuple_)          
        
     return filename_and_songs
 
-def has_acceptable_durations(song, minimum_duration_multiple = ACCEPTABLE_DURATIONS_MULTIPLE):
+        
+def get_simple_list_general_notes(stream):
+    """
+    Get a list of (note type, duration) in the M21 stream object
+
+    Args:
+        stream (Music21 Stream): list of general notes objects.
+
+    Raises:
+        Exception: If the class is unknown for any element of the stream.
+
+    Returns:
+        simple_list (list of (str,float)): name and duration of each note.
+
+    """
+    
+    simple_list = []
+        
+    for i, element in enumerate(stream):
+        
+        name = ""
+        duration = str(element.quarterLength)
+                
+        if isinstance(element, m21.note.Rest):   # handle rest
+            name = "rest"
+        elif isinstance(element, m21.note.Note): # handle note
+            name = element.nameWithOctave
+        elif isinstance(element, m21.chord.Chord): # handle chord
+            name = element.pitchedCommonName
+        else:
+            raise Exception("Class unknown for element e {e}")
+        
+        simple_list.append((name,duration))
+    
+    return simple_list
+
+def has_acceptable_durations(song, time_step_duration = TIME_STEP_DURATION):
     """
     Returns True if piece has all acceptable duration, False otherwise.
     The song duration has to be multiple of 
     
     Arguments:
-    - minimum_duration_multiple (float): minimum multiplier of duration
     - song (m21 stream)
-    
+    - minimum_duration_multiple (float): minimum multiplier of duration
+        
     Returns:
     - true or false
     """
     #Looks at all of the notes M21 Objects   
     print("\n\tDuration histogram for each part:")
     
-    acceptable_by_part = {}
-    
     # Look at each part    
     parts_list = song.getElementsByClass(m21.stream.Part)
+    notes_list_per_part = {}
+    acceptable_by_part = {}
+    
     for i, p in enumerate(parts_list):
         
         part_name = p.partName
@@ -77,31 +119,35 @@ def has_acceptable_durations(song, minimum_duration_multiple = ACCEPTABLE_DURATI
         print(f"\n\t\tPart #{i+1}, name = {part_name}")
         print("\t\tduration histogram:")    
     
-        # Creates dictionary of durations
+        # Creates dictionary of durations for each part
         duration_to_frequency = {} #dictionary duration -> frequency
-        notes_and_rests = p.flat.notesAndRests
+        notes_and_rests = p.flat.notesAndRests        
+        notes_list_per_part[part_name] = get_simple_list_general_notes(notes_and_rests)
+        
+        # Fill the notes dictionary
         for note in notes_and_rests:
-            duration = note.duration.quarterLength      
-            if duration not in duration_to_frequency.keys():
-                 duration_to_frequency[duration] = 0
-            duration_to_frequency[duration] += 1   
+            note_duration = note.duration.quarterLength            
+            if note_duration not in duration_to_frequency.keys():
+                 duration_to_frequency[note_duration] = 0
+            duration_to_frequency[note_duration] += 1            
         ordered_dict_by_val = dict(sorted(duration_to_frequency.items(), key=lambda item: item[1]))
             
-        # checks if duration is ok        
+        # checks if duration is ok, that is, when the duration of the event can be written
+        # as an integer multiple of our time_step        
         for dur, freq in ordered_dict_by_val.items():
-            is_dur_ok = (dur % minimum_duration_multiple == 0)
-            acceptable_by_part[p] = acceptable_by_part[p] and is_dur_ok
-            print(f"\t\t\td = {dur} appears {freq} times, acceptable: {is_dur_ok}")
-        
-            
+            duration_time_steps = Fraction(dur/time_step_duration)
+            is_duration_ok = duration_time_steps.denominator == 1
+            acceptable_by_part[p] = acceptable_by_part[p] and is_duration_ok
+            print(f"\t\t\td = {dur} appears {freq} times, acceptable: {is_duration_ok}")
+                
     # check acceptabilty for all the parts
     is_acceptable = True
-    print()
     for i, p in enumerate(acceptable_by_part.keys()):
         part_name = p.partName
-        print(f"\tPart #{i+1}, name = {part_name} is acceptable: {acceptable_by_part[p]}")
+        print(f"\n\tPart #{i+1}, name = {part_name} is acceptable: {acceptable_by_part[p]}")
         is_acceptable = is_acceptable and acceptable_by_part[p]
     
+    print(f"\nSong is acceptable: {is_acceptable}")
     return is_acceptable
 
 def transpose(song):
@@ -109,24 +155,22 @@ def transpose(song):
     Transposes song to C maj/A min. This is done to facilitate the learninig process afterwards, 
     otherwise, the model would have to learn all the 24 keys and thus need more data. It is better 
     to just learn 2 keys, C major and A minor.
-    -param piece (m21 stream): Piece to transpose
-    -return transposed_song (m21 stream)
+    
+    Arguments:
+    song (m21 stream): Piece to transpose
+    
+    Returns
+    transposed_song (m21 stream)
     """
 
     print("\n\tTransposing song")
-
-    # get key from the song
-    parts_list = song.getElementsByClass(m21.stream.Part)
-    
-    # Just look at the first part (hardcode)
-    first_part = parts_list[0].getElementsByClass(m21.stream.Measure) # getting all the measures
     
     # Look at the key
     key = None
     
     # Try to extract it from the object
     try:
-        key = first_part[0][4] # the key is usually stored in the index = 4
+        key = song.keySignature
     except:
         pass
     
@@ -146,7 +190,7 @@ def transpose(song):
     tranposed_song = song.transpose(interval)
     return tranposed_song
 
-def encode_song(song, time_step = ACCEPTABLE_DURATIONS_MULTIPLE):
+def encode_song(song, time_step_duration = TIME_STEP_DURATION):
     """
     Converts a score into a time-series-like music representation. Each item in the encoded list represents
     quarter lengths and is appended by a space character. The symbols used at each step are: 
@@ -170,20 +214,19 @@ def encode_song(song, time_step = ACCEPTABLE_DURATIONS_MULTIPLE):
     
     Here's a sample encoding:
     
-    C4 note for 1 duration would be:
+    C4 note for 4 time steps would be:
         [60 _ _ _]
         Pitch Symbol = 60
-        The note lasts 4 quarter lengths
-    
-    Dmaj (D + F# + A) chord for 1/2 duration would be:
+            
+    Dmaj (D + F# + A) chord for 2 time steps would be:
         [62,66,69 _]
     
     Arguments:
     -song (m21 stream): Piece to encode
-    -time_step (float): Duration of each time step in quarter length
+    -time_step_duration (float): Duration of each time step in quarter length
 
     Returns:
-        encoded song
+        encoded song (list of str)
     """
     
     # Documentation about General Note -> base class for {Note, Rest, Chord}
@@ -196,9 +239,11 @@ def encode_song(song, time_step = ACCEPTABLE_DURATIONS_MULTIPLE):
     
     encoded_song = []
 
-    # Flattening all the elements of the song and consider just (A) notes and (B) rests
-    flat_representation = song.flat
-    note_chords_rests_list = flat_representation.notesAndRests
+    # Flattening all the events of the song and consider just notes, chords and rests
+    parts = song.getElementsByClass(m21.stream.Part)
+    part0_flat = parts[0].flat
+    nar0 = part0_flat.notesAndRests
+    note_chords_rests_list = song.flat.notesAndRests
     for event in note_chords_rests_list:
         
         symbol = None
@@ -209,22 +254,26 @@ def encode_song(song, time_step = ACCEPTABLE_DURATIONS_MULTIPLE):
         
         # (B) handle chords
         elif isinstance(event, m21.chord.Chord):
-            # List of pitches in the chord, for Dmaj would be [62,66,69]
+            # List of pitches in the chord, i.e., Dmaj would be [62,66,69]
             # Need to get them sorted to avoid duplicates, such as [62,66,69] and [66,62,69]
             sorted_pitches_by_midi = sorted([p.midi for p in event.pitches])
             midi_pitches = [str(i) for i in sorted_pitches_by_midi]
             # Append them in a string object sepparated by comma
-            symbol = ",".join(midi_pitches)
+            symbol = ",".join(midi_pitches) # [62,66,69] <-> "62,66,69"
         
         # (C) handle rests
         elif isinstance(event, m21.note.Rest):
             symbol = "r"
-
-        # convert the note or the rest into time series notation
-        steps = int(event.duration.quarterLength / time_step)
+        
+        else:
+            raise Exception("don't know class of element {event}")
+        
+        # convert the event into time series notation
+        event_duration = event.duration.quarterLength
+        steps = int(event_duration/ time_step_duration)
         for step in range(steps):
 
-            # If it's the first time we see a event, let's encode it. "60" of [60, "_", "_", "_"]
+            # If it's the first time we see a event, let's encode it.
             # Otherwise, it means we're carrying the same symbol in a new time step "_" of [60, "_", "_", "_"]
             if step == 0:
                 encoded_song.append(symbol)
@@ -254,7 +303,7 @@ def preprocess(songs_path = SONGS_PATH):
         
     # 1. Loads the songs
     print("Loading songs...")
-    filename_and_songs = load_songs(songs_path) #list of tuples
+    filename_and_songs = load_songs(songs_path) #list of tuples (file_name, m21.Score)
     quantity_songs = len(filename_and_songs)
     max_digits = len(str(quantity_songs))
           
@@ -262,54 +311,45 @@ def preprocess(songs_path = SONGS_PATH):
     saved_songs = 0
     for i, filename_song in enumerate(filename_and_songs):
 
-        file_name, song = filename_song # retrieve the info from the tuple     
-        print(f"\nAnalyzing song #{i+1} named {file_name}")        
-
-        # Song characteristics
-        song_parts = song.getElementsByClass(m21.stream.Part)
-        print(f"\n\tThe song has {len(song_parts)} parts:")
-        for i, p in enumerate(song_parts):
-            part_name2 = p.partName
-            print(f"\t\tPart #{i} name is {part_name2}")
-
-        # 2. Eliminate songs with non acceptable durations
-        if not has_acceptable_durations(song):
-            print("\tdurations are non acceptable, song not encoded...")
-            continue # skip the song
-
-        # 3. Transpose the song to Cmaj or Amin key
-        song = transpose(song)
-
-        # 4. Encode each song with music time series representation
-        encoded_song = encode_song(song)
-
-        # Create folder if not existant
-        if not os.path.exists(ENCODED_SONGS_FOLDER_PATH):
-            os.makedirs(ENCODED_SONGS_FOLDER_PATH)
-
-        # Save songs to text file
-        encoded_file_name = "encoded song " + str(i).zfill(max_digits) + " " + file_name
-        file_path = ENCODED_SONGS_FOLDER_PATH + "/" + encoded_file_name
-        with open(file_path, "w") as fp:
-            fp.write(encoded_song)
+        song_name, song = filename_song # retrieve the info from the tuple     
+        print(f"\nAnalyzing song #{i+1} named {song_name}")        
+        
+        # 1. Check note's duration compatibility
+        are_durations_acceptable = has_acceptable_durations(song)
+        
+        # 2. For now just allow streams with a single part
+        is_single_parted = len(song.getElementsByClass(m21.stream.Part)) == 1
+        
+        if are_durations_acceptable and is_single_parted:
+        
+            # 3. Transpose the song to Cmaj or Amin key
+            # transposed_song = transpose(song)
+            
+            # 4. Encode each song with music time series representation
+            encoded_song = encode_song(song)
+    
+            # 5. Save encoded song to text file
+            encoded_file_name = "encoded song " + str(i).zfill(max_digits) + " " + song_name
+            create_plain_file(ENCODED_SONGS_FOLDER_PATH, 
+                              encoded_file_name, 
+                              encoded_song,
+                              "txt")
+            print("\t\tencoded song created as text file")
+            
+            # 6. Sanity check: create the file just encoded as a midi file to check-hear it
+            create_midi_file_from_encoded_text_file(encoded_file_name, 
+                                                     ENCODED_SONGS_FOLDER_PATH, 
+                                                     encoded_file_name,
+                                                     TIME_STEP_DURATION)
+            print("\t\tencoded song created as midi file as well")
+            
+            # Update counter
             saved_songs += 1
-            print(f"\t\tSaved as '{encoded_file_name}'")
+        
+        else:
+            print(f"\nSong #{i+1} named {song_name} was not processed")
         
     print(f"\nnumber of encoded songs: {saved_songs}")
-
-def load(file_path):
-    """
-    Reads the encoded path for a song
-    
-    Arguments:
-    - file_path (str): path to the encoded song
-    
-    Returns:
-    - song (str): the str which has the encoding
-    """
-    with open(file_path, "r") as fp:
-        song = fp.read()
-    return song
 
 
 def create_single_file_dataset(dataset_path = ENCODED_SONGS_FOLDER_PATH, 
@@ -335,9 +375,13 @@ def create_single_file_dataset(dataset_path = ENCODED_SONGS_FOLDER_PATH,
     # load encoded songs and add delimiters
     for path, _, files in os.walk(dataset_path):
         for file in files:
-            file_path = os.path.join(path, file) #this is the full path of the song
-            song = load(file_path) # is a string like "60 _ _ _ 61 _ _ _ 62 _ 66 _ ..."
-            songs = songs + song + " " + new_song_delimiter
+            file_name, file_extension = os.path.splitext(file)
+            
+            # Just consider text files
+            if file_extension == ".txt":            
+                file_path = os.path.join(path, file) 
+                song = load_plain_file(file_path) # is a string like "60 _ _ _ 61 _ _ _ 62 _ 66 _ ..."
+                songs = songs + song + " " + new_song_delimiter
 
     # remove empty space from last character of string
     songs = songs[:-1]
@@ -369,15 +413,17 @@ def create_mapping(songs):
     vocabulary = list(set(songs.split())) #the set eliminate duplicates symbols
     
     # create mappings
-    print(f"\tthere are {len(vocabulary)} unique symbols. The elements are:")
+    print(f"\tthere are {len(vocabulary)} unique symbols")
     for i, symbol in enumerate(vocabulary):
         mappings_symbol_to_index[symbol] = i
         mappings_index_to_symbol[i] = symbol
-        print(f"\t\t{symbol} <-> {i}")
+        #print(f"\t\t{symbol} <-> {i}")
 
     # save both dictionaries to a json file
+    ordered_dict_symbol_to_index = collections.OrderedDict(sorted(mappings_symbol_to_index.items()))
     with open(MAPPING_SYMBOL_TO_INDEX_PATH, "w") as fp: #open the file in writing mode
-        json.dump(mappings_symbol_to_index, fp, indent=4) #indent to easier reading
+        json.dump(ordered_dict_symbol_to_index, fp, indent=4) #indent to easier reading
+    
     
     with open(MAPPING_INDEX_TO_SYMBOL_PATH, "w") as fp: #open the file in writing mode
         json.dump(mappings_index_to_symbol, fp, indent=4) #indent to easier reading
@@ -409,7 +455,6 @@ def map_from_symbol_to_indexes(mapped_songs_file):
 
     return song_encoded_as_indexes
 
-
 def generate_training_sequences(sequence_length_Tx):
     """
     Create X and Y data samples for training. Each sample is a sequence.
@@ -430,7 +475,7 @@ def generate_training_sequences(sequence_length_Tx):
     """
 
     # load songs from encoded single file and map them to int
-    encoded_single_file = load(SINGLE_FILE_DATASET_PATH)
+    encoded_single_file = load_plain_file(SINGLE_FILE_DATASET_PATH)
     song_encoded_as_indexes = map_from_symbol_to_indexes(encoded_single_file)
 
     # Initialize outputs
@@ -453,7 +498,6 @@ def generate_training_sequences(sequence_length_Tx):
     Y = np.array(Y)
 
     return X, Y
-
 
 def main():
     preprocess()
