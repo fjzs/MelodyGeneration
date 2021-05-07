@@ -39,17 +39,17 @@ def create_plain_file(directory, file_name, content, extension):
 
 def load_plain_file(file_path):
     """
-    Reads the encoded path for a song
+    Reads a path and returns the string information
     
     Arguments:
-    - file_path (str): path to the encoded song
+    - file_path (str): path to the file
     
     Returns:
-    - song (str): the str which has the encoding
+    - text (str): the information to be retrieved
     """
     with open(file_path, "r") as fp:
-        song = fp.read()
-    return song
+        info = fp.read()
+    return info
 
 def create_general_note(quarter_length_duration, symbol):
     """
@@ -167,12 +167,31 @@ def create_midi_file_from_encoded_text_file(plain_file_name, directory, new_file
     stream.write(fmt = "midi", fp = path)
     
     print("\t\tencoded song created as midi file (sanity check)")
+        
+def save_midi_file_from_midi_object(mf: m21.midi.MidiFile, directory: str, file_name: str):
+    """
+    Saves to disk the midi file
+
+    Args:
+        mf (m21.midi.MidiFile): the object.
+        directory (str): 
+        file_name (str): 
+
+    Returns:
+        None.
+
+    """
+        
+    # Create folder if not existant
+    if not os.path.exists(directory):
+        os.makedirs(directory)
     
-    
-    
-    
-    
-    
+    # Create the file
+    fullpath = directory + "/" + file_name   
+    mf.open(fullpath, attrib='wb')
+    mf.write()
+    mf.close()
+   
     
     
     
