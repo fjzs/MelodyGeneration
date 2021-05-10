@@ -1,0 +1,5 @@
+(1) Feed the model with simple melodies from 10 pop songs
+- remove long rests
+(2) Check creations with t=0, t=1, ..., t=10
+(3) Conduct error analysis
+(4) Try new model with a CNN layer in between the X and the LSTM

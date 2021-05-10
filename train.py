@@ -5,9 +5,10 @@
 import keras as K
 import os
 import numpy as np
+import tensorflow as tf
 from preprocess import ENCODED_SONGS_FOLDER_PATH, DIRECTORY
 from file_utils import load_plain_file
-from MidiIndexUtils import VOCABULARY_SIZE
+from midi_index_utils import VOCABULARY_SIZE
 
 # ------------------------- Dataset parameters ---------------------------------#
 SEQUENCE_LENGTH_TX = 128
@@ -16,8 +17,8 @@ SEQUENCE_LENGTH_TX = 128
 NUM_HIDDEN_UNITS_PER_LAYER = [64] #256
 LOSS = "sparse_categorical_crossentropy"
 LEARNING_RATE = 0.01
-BATCH_SIZE = 128
-SAVE_MODEL_PATH = DIRECTORY + "/model.h5"
+BATCH_SIZE = 256
+MODEL_FILE = DIRECTORY + "/model.h5"
 DROPOUT_RATE_PER_LAYER = [0.2] #list containing the drop-out rate per layer
 # ------------------------------------------------------------------------------#
 
@@ -89,28 +90,37 @@ def generate_dataset(encodings_directory: str = ENCODED_SONGS_FOLDER_PATH, tx: i
         for i,file in enumerate(files):
             file_name, file_extension = os.path.splitext(file)
             
-            # Just consider text files
-            if file_extension == ".txt":            
-                file_path = os.path.join(path, file) 
-                encoded_song = load_plain_file(file_path)
-                indices_list_str = encoded_song.split(',')
-                indices_list_int = [int(i) for i in indices_list_str]
-                
-            # Generate the training sequences
-            # if we have 5 symbols: [1,2,3,4,5] and sequence length is 3, then we have:
-            # [1,2,3] -> 4, [2,3,4] -> 5   => 2 sequences
-            num_examples = len(indices_list_int) - tx
-            print(f"\tFile #{i+1} has {num_examples} examples")
-            if num_examples > 0:            
-                for i in range(num_examples):
-                    training_example_x = indices_list_int[i : i + tx] # List of values from i ... i + Tx - 1
-                    training_example_y = indices_list_int[i + tx]     # Value with index = i + Tx
-                    X.append(training_example_x) 
-                    Y.append(training_example_y)
+            #Load just some files
+            if i == 1:
+            
+                # Just consider text files
+                if file_extension == ".txt":            
+                    file_path = os.path.join(path, file) 
+                    encoded_song = load_plain_file(file_path)
+                    indices_list_str = encoded_song.split(',') #these are string elements
+                    indices_list_int = [int(i) for i in indices_list_str] #cast as int
+                    
+                # Generate the training sequences
+                # if we have 5 symbols: [1,2,3,4,5] and sequence length is 3, then we have:
+                # [1,2,3] -> 4, [2,3,4] -> 5   => 2 sequences
+                num_examples = len(indices_list_int) - tx
+                print(f"\tFile #{i+1} has {num_examples} examples")
+                if num_examples > 0:            
+                    for i in range(num_examples):
+                        
+                        # List of values from i ... i + Tx - 1
+                        training_example_x = np.array(indices_list_int[i : i + tx], dtype = np.int32)
+                        
+                        # Value with index = i + Tx
+                        training_example_y = np.array(indices_list_int[i + tx], dtype = np.int32)     
+                        
+                        # Append to dataset
+                        X.append(training_example_x) 
+                        Y.append(training_example_y)
     
     # One-Hot encode the sequences
     X = K.utils.to_categorical(X, num_classes = VOCABULARY_SIZE)
-    Y = np.array(Y)
+    Y = np.array(Y, dtype = np.int32)
     print(f"The dataset has a total of {X.shape[0]} examples")
     
     return X, Y    
@@ -135,16 +145,25 @@ def train():
     X, Y = generate_dataset()
     m = X.shape[0]    
 
+    # Check GPU availability
+    physical_devices = tf.config.list_physical_devices("GPU")
+    if len(physical_devices) > 0:
+        tf.config.experimental.set_memory_growth(physical_devices[0], True)
+    else:
+        print("GPU not found")
+    
     # Build the model
     model = build_model()
 
     # train the model
     total_epochs = int(m/BATCH_SIZE) 
     history = model.fit(X, Y, epochs = total_epochs, batch_size = BATCH_SIZE, verbose = 1)
-
+    print(type(history))
+    print(history)
+    
     # save the model to not start everytime from scratch
-    model.save(SAVE_MODEL_PATH)
-    print(f"Model saved to {SAVE_MODEL_PATH}")
+    model.save(MODEL_FILE)
+    print(f"Model saved to {MODEL_FILE}")
 
 if __name__ == "__main__":
     train()
