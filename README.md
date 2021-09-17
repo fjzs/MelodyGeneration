@@ -10,8 +10,9 @@ It is strongly inspired by:
 # Characteristics
 
 Current characteristics:
-*  Consideration of notes and chords for a single part of a MIDI file
-*  It is not multi-instrumental
+*  Uses MIDI file as an input
+*  It is a single-instrument problem
+*  Dataset comes from the 
 
 Code style.
 I'm not the best programmer, but I follow this rules:
